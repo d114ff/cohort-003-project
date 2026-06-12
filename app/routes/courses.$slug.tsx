@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { Link, useSearchParams } from "react-router";
+import { useEffect, useState } from "react";
+import { Link, useSearchParams, useFetcher } from "react-router";
 import { toast } from "sonner";
 import type { Route } from "./+types/courses.$slug";
 import {
@@ -13,6 +13,11 @@ import {
   getLessonProgressForCourse,
   getNextIncompleteLesson,
 } from "~/services/progressService";
+import {
+  getCourseAverageRating,
+  getUserRating,
+  upsertRating,
+} from "~/services/ratingService";
 import { getCurrentUserId } from "~/lib/session";
 import { LessonProgressStatus } from "~/db/schema";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
@@ -37,11 +42,19 @@ import {
 } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { UserAvatar } from "~/components/user-avatar";
+import { StarRating, InteractiveStarRating } from "~/components/star-rating";
 import { data, isRouteErrorResponse } from "react-router";
 import { formatDuration, formatPrice } from "~/lib/utils";
 import { renderMarkdown } from "~/lib/markdown.server";
 import { resolveCountry } from "~/lib/country.server";
 import { calculatePppPrice, getCountryTierInfo } from "~/lib/ppp";
+import { parseFormData } from "~/lib/validation";
+import { z } from "zod";
+
+const rateActionSchema = z.object({
+  intent: z.literal("rate-course"),
+  rating: z.coerce.number().int().min(1).max(5),
+});
 
 export function meta({ data: loaderData }: Route.MetaArgs) {
   const title = loaderData?.course?.title ?? "Course";
@@ -102,6 +115,14 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     : courseWithDetails.price;
   const tierInfo = getCountryTierInfo(country);
 
+  // Fetch rating data
+  const { average: averageRating, count: ratingCount } = getCourseAverageRating(course.id);
+  let userRating = 0;
+  if (currentUserId) {
+    const existing = getUserRating(currentUserId, course.id);
+    userRating = existing?.rating ?? 0;
+  }
+
   return {
     course: courseWithDetails,
     salesCopyHtml,
@@ -113,10 +134,41 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     currentUserId,
     pppPrice,
     tierInfo,
+    averageRating,
+    ratingCount,
+    userRating,
   };
 }
 
-// No action — enrollment is handled via the purchase confirmation page
+// ─── Action ───
+// Handles course rating submission from enrolled students.
+export async function action({ params, request }: Route.ActionArgs) {
+  const slug = params.slug;
+  const course = getCourseBySlug(slug);
+  if (!course) {
+    throw data("Course not found.", { status: 404 });
+  }
+
+  const currentUserId = await getCurrentUserId(request);
+  if (!currentUserId) {
+    throw data("You must be logged in.", { status: 401 });
+  }
+
+  if (!isUserEnrolled(currentUserId, course.id)) {
+    throw data("You must be enrolled to rate this course.", { status: 403 });
+  }
+
+  const formData = await request.formData();
+  const parsed = parseFormData(formData, rateActionSchema);
+  if (!parsed.success) {
+    throw data("Invalid rating.", { status: 400 });
+  }
+
+  upsertRating(currentUserId, course.id, parsed.data.rating);
+  return { ok: true };
+}
+
+// No enrollment action — enrollment is handled via the purchase confirmation page
 
 export function HydrateFallback() {
   return (
@@ -181,9 +233,13 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     currentUserId,
     pppPrice,
     tierInfo,
+    averageRating,
+    ratingCount,
+    userRating,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
+  const [localRating, setLocalRating] = useState(userRating);
 
   useEffect(() => {
     if (searchParams.get("already_enrolled") === "1") {
@@ -197,6 +253,15 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
       );
     }
   }, [searchParams, setSearchParams]);
+
+  const ratingFetcher = useFetcher();
+  const isRatingSubmitting = ratingFetcher.state !== "idle";
+
+  useEffect(() => {
+    if (ratingFetcher.state === "idle" && ratingFetcher.data?.ok) {
+      toast.success("Rating saved!");
+    }
+  }, [ratingFetcher.state, ratingFetcher.data]);
 
   const totalDuration = course.modules.reduce(
     (sum, mod) =>
@@ -320,6 +385,13 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
               {formatDuration(totalDuration, true, false, false)} total
             </span>
           )}
+          <span className="flex items-center gap-1">
+            <StarRating
+              average={averageRating}
+              count={ratingCount}
+              size="sm"
+            />
+          </span>
         </div>
       </div>
 
@@ -413,6 +485,40 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                       Buy More Seats
                     </Button>
                   </Link>
+
+                  {/* Rating section */}
+                  <div className="border-t pt-4">
+                    <h3 className="mb-2 text-sm font-medium">Rate this course</h3>
+                    <ratingFetcher.Form
+                      method="post"
+                      id="rating-form"
+                      className="flex items-center gap-2"
+                    >
+                      <input type="hidden" name="intent" value="rate-course" />
+                      <input type="hidden" name="rating" value={localRating} />
+                      <InteractiveStarRating
+                        value={localRating}
+                        disabled={isRatingSubmitting}
+                        onChange={(rating) => {
+                          setLocalRating(rating);
+                          // Use setTimeout so React state updates before form submission
+                          setTimeout(() => {
+                            const form = document.getElementById("rating-form") as HTMLFormElement;
+                            if (form) {
+                              const input = form.querySelector<HTMLInputElement>('input[name="rating"]');
+                              if (input) input.value = String(rating);
+                              ratingFetcher.submit(form);
+                            }
+                          }, 0);
+                        }}
+                      />
+                    </ratingFetcher.Form>
+                    {isRatingSubmitting && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Saving...
+                      </p>
+                    )}
+                  </div>
                 </>
               ) : (
                 enrollButton

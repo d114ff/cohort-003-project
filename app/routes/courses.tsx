@@ -2,6 +2,7 @@ import { Form, Link, useSearchParams, useNavigation, isRouteErrorResponse } from
 import type { Route } from "./+types/courses";
 import { buildCourseQuery, getLessonCountForCourse } from "~/services/courseService";
 import { getAllCategories } from "~/services/categoryService";
+import { getMultipleCourseRatings } from "~/services/ratingService";
 import { CourseStatus } from "~/db/schema";
 import { Card, CardContent, CardFooter, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
@@ -9,6 +10,7 @@ import { Skeleton } from "~/components/ui/skeleton";
 import { AlertTriangle, BookOpen, Search } from "lucide-react";
 import { CourseImage } from "~/components/course-image";
 import { UserAvatar } from "~/components/user-avatar";
+import { StarRating } from "~/components/star-rating";
 import { getCurrentUserId } from "~/lib/session";
 import { formatPrice } from "~/lib/utils";
 import { getUserEnrolledCourses } from "~/services/enrollmentService";
@@ -69,9 +71,22 @@ export async function loader({ request }: Route.LoaderArgs) {
     };
   });
 
+  // Fetch ratings for all displayed courses
+  const courseIds = coursesWithLessonCount.map((c) => c.id);
+  const ratingMap = getMultipleCourseRatings(courseIds);
+
+  const coursesWithRatings = coursesWithLessonCount.map((course) => {
+    const rating = ratingMap.get(course.id)!;
+    return {
+      ...course,
+      averageRating: rating.average,
+      ratingCount: rating.count,
+    };
+  });
+
   const categories = getAllCategories();
 
-  return { courses: coursesWithLessonCount, categories, search, category, currentUserId };
+  return { courses: coursesWithRatings, categories, search, category, currentUserId };
 }
 
 function CourseCardSkeleton() {
@@ -209,6 +224,13 @@ export default function CourseCatalog({ loaderData }: Route.ComponentProps) {
                   <p className="line-clamp-2 text-sm text-muted-foreground">
                     {course.description}
                   </p>
+                  <div className="mt-2">
+                    <StarRating
+                      average={course.averageRating}
+                      count={course.ratingCount}
+                      size="sm"
+                    />
+                  </div>
                 </CardContent>
                 {course.progress !== null && course.progress > 0 && (
                   <CardContent className="pt-0">

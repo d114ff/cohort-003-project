@@ -45,6 +45,7 @@ async function seed() {
 
   // Drop and recreate tables for a clean seed
   sqlite.exec(`
+    DROP TABLE IF EXISTS ratings;
     DROP TABLE IF EXISTS video_watch_events;
     DROP TABLE IF EXISTS quiz_answers;
     DROP TABLE IF EXISTS quiz_attempts;
@@ -1402,6 +1403,30 @@ You've completed the Building REST APIs course. You now have the skills to build
     .run();
 
   console.log("Created 7 enrollments.");
+
+  // ─── Ratings ───
+  // Add some star ratings from enrolled students to both courses
+
+  // Course 1 ratings (Introduction to TypeScript)
+  db.insert(schema.ratings)
+    .values([
+      { userId: students[0].id, courseId: course1.id, rating: 5, createdAt: daysAgo(20), updatedAt: daysAgo(20) }, // Emma ★★★★★
+      { userId: students[1].id, courseId: course1.id, rating: 5, createdAt: daysAgo(15), updatedAt: daysAgo(15) }, // James ★★★★★
+      { userId: students[2].id, courseId: course1.id, rating: 4, createdAt: daysAgo(10), updatedAt: daysAgo(10) }, // Olivia ★★★★☆
+      { userId: students[4].id, courseId: course1.id, rating: 4, createdAt: daysAgo(5), updatedAt: daysAgo(5) },   // Sophia ★★★★☆
+    ])
+    .run();
+
+  // Course 2 ratings (Building REST APIs with Node.js)
+  db.insert(schema.ratings)
+    .values([
+      { userId: students[0].id, courseId: course2.id, rating: 4, createdAt: daysAgo(18), updatedAt: daysAgo(18) }, // Emma ★★★★☆
+      { userId: students[2].id, courseId: course2.id, rating: 5, createdAt: daysAgo(8), updatedAt: daysAgo(8) },   // Olivia ★★★★★
+      { userId: students[3].id, courseId: course2.id, rating: 3, createdAt: daysAgo(5), updatedAt: daysAgo(5) },   // Liam ★★★☆☆
+    ])
+    .run();
+
+  console.log("Created 7 ratings.");
 
   // ─── Lesson Progress ───
 
